@@ -227,7 +227,6 @@ void* ghost_thread(void *arg) {
     }
 }
 
-// Substitui o main original. É chamado pelo server.c
 int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
     srand((unsigned int)time(NULL));
 
@@ -244,21 +243,27 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
     ctx.next_command = '\0';
     pthread_mutex_init(&ctx.cmd_lock, NULL);
 
-    // debug log específico para cada processo/sessão poderia ser configurado aqui
-    // open_debug_file("server_session.log"); 
-
     int accumulated_points = 0;
     bool end_game = false;
-    board_t game_board;
+    
+    // CORREÇÃO: Inicializar a estrutura a zeros para evitar SegFaults com "lixo" de memória
+    board_t game_board; 
+    memset(&game_board, 0, sizeof(board_t));
 
     struct dirent* entry;
-    // Lógica simplificada de leitura de níveis (pode precisar de ordenação alfabética para ser determinístico)
+    
     while ((entry = readdir(level_dir)) != NULL && !end_game) {
         if (entry->d_name[0] == '.') continue;
         char *dot = strrchr(entry->d_name, '.');
         if (!dot || strcmp(dot, ".lvl") != 0) continue;
 
-        load_level(&game_board, entry->d_name, level_dir_path, accumulated_points);
+        // Tentar carregar o nível
+        int load_res = load_level(&game_board, entry->d_name, level_dir_path, accumulated_points);
+        if (load_res != 0) {
+            fprintf(stderr, "Erro ao carregar nível: %s\n", entry->d_name);
+            continue; // Salta este nível se falhar
+        }
+
         ctx.board = &game_board;
 
         // Enviar estado inicial
@@ -305,9 +310,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
 
             // Processar resultado
             if(result == NEXT_LEVEL) {
-                // Enviar notificação de vitória do nível? 
-                // O enunciado diz apenas periodicamente updates, mas podemos mandar uma flag victory se quisermos
-                // Por agora, avança para o proximo loop
                 break; // Sai do loop interno, vai para o próximo nível
             }
 
@@ -327,14 +329,16 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
         }
         
         unload_level(&game_board);
+        // Reinicializar a estrutura a zeros após unload para garantir limpeza
+        memset(&game_board, 0, sizeof(board_t)); 
     } 
 
     // Se saiu do loop porque acabaram os niveis
     if (!end_game) {
-        // Enviar Vitória final (tabuleiro vazio, flag victory=1)
-        // Necessário criar um board dummy ou usar o último estado
-        //board_t empty_board = {0}; // Cuidado aqui, melhor usar flags no último send
-        send_board_update(notif_fd, &game_board, 1, 0); // Exemplo
+        // Enviar Vitória final
+        // Criar board vazio dummy para enviar sinal de vitória
+        board_t empty_board = {0}; 
+        send_board_update(notif_fd, &empty_board, 1, 0); 
     }
 
     pthread_mutex_destroy(&ctx.cmd_lock);
