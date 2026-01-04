@@ -136,13 +136,19 @@ int read_pacman(board_t* board, int points) {
     pacman_t* pacman = &board->pacmans[0];
     pacman->alive = 1;
     pacman->points = points;
+    pacman->current_move = 0;
 
-    // no file was provided -> defaults 
-    if (board->pacman_file[0] == '\0') {
+    int fd = -1;
+
+    if (board->pacman_file[0] != '\0') {
+        fd = open(board->pacman_file, O_RDONLY);
+    }
+
+    if (fd == -1) {
         pacman->passo = 0;
         pacman->waiting = 0;
         pacman->n_moves = 0; // user controlled
-        // default position -> find first non occupied cell
+
         for (int i = 0; i < board->height; i++) {
             for (int j = 0; j < board->width; j++) {
                 int idx = i * board->width + j;
@@ -150,25 +156,21 @@ int read_pacman(board_t* board, int points) {
                     pacman->pos_x = j;
                     pacman->pos_y = i;
                     board->board[idx].content = 'P';
-                    goto pacman_inserted;
+            
+                    return 0;
                 }
             }
         }
-
-        pacman_inserted:
         return 0;
     }
-
-    int fd = open(board->pacman_file, O_RDONLY);
 
     int read;
     char command[MAX_COMMAND_LENGTH];
     while ((read = read_line(fd, command)) > 0) {
-        // comment
         if (command[0] == '#' || command[0] == '\0') continue;
 
         char *word = strtok(command, " \t\n");
-        if (!word) continue;  // skip empty line
+        if (!word) continue;
 
         if (strcmp(word, "PASSO") == 0) {
             char *arg = strtok(NULL, " \t\n");
@@ -194,10 +196,8 @@ int read_pacman(board_t* board, int points) {
         }
     }
 
-    // end of the file contains the moves
     pacman->current_move = 0;
     
-    // command here still holds the previous line
     int move = 0;
     while (read > 0 && move < MAX_MOVES) {
         if (command[0]== '#' || command[0] == '\0') continue;
@@ -206,8 +206,8 @@ int read_pacman(board_t* board, int points) {
             command[0] == 'W' ||
             command[0] == 'S' ||
             command[0] == 'R' ||
-            command[0] == 'G' ||  // FIXME: so para testar
-            command[0] == 'Q') {  // FIXME: so para testar
+            command[0] == 'G' ||
+            command[0] == 'Q') {
                 pacman->moves[move].command = command[0];
                 pacman->moves[move].turns = 1;
                 move += 1;
@@ -235,7 +235,6 @@ int read_pacman(board_t* board, int points) {
     close(fd);
     return 0;
 }
-
 
 int read_ghosts(board_t* board) {
     for (int i = 0; i < board->n_ghosts; i++) {

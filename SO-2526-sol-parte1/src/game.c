@@ -42,7 +42,6 @@ int create_backup() {
 }
 
 void screen_refresh(board_t * game_board, int mode) {
-    debug("REFRESH\n");
     draw_board(game_board, mode);
     refresh_screen();     
 }
