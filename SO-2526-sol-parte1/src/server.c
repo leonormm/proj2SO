@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <semaphore.h>
 #include "protocol.h"
+#include "board.h"  // <--- 1. ADICIONAR ESTE INCLUDE
 
 // Estrutura para passar argumentos para a thread do cliente
 typedef struct {
@@ -21,21 +22,19 @@ typedef struct {
 int run_game_session(int req_fd, int notif_fd, char* level_dir);
 
 // Semáforo para controlar o número máximo de sessões (max_games)
-// No macOS deve ser um ponteiro para usar sem_open
 sem_t *session_sem;
 
 void* client_thread(void* arg) {
     session_args_t* args = (session_args_t*)arg;
     
     // Abrir pipes do cliente (O_RDWR como pedido)
-    // O servidor lê dos pedidos e escreve nas notificações
     int req_fd = open(args->req_pipe, O_RDWR);
     int notif_fd = open(args->notif_pipe, O_RDWR);
 
     if (req_fd == -1 || notif_fd == -1) {
         perror("Erro ao abrir pipes do cliente");
         free(args);
-        sem_post(session_sem); // Liberta vaga no semáforo
+        sem_post(session_sem);
         return NULL;
     }
 
@@ -45,8 +44,7 @@ void* client_thread(void* arg) {
     response[1] = 0; // Sucesso
     write(notif_fd, response, 2);
 
-    // Iniciar a lógica do jogo para este cliente
-    // Esta função deve bloquear até o jogo terminar
+    // Iniciar a lógica do jogo
     run_game_session(req_fd, notif_fd, args->level_dir);
 
     // Limpeza
@@ -54,7 +52,6 @@ void* client_thread(void* arg) {
     close(notif_fd);
     free(args);
 
-    // Libertar o lugar na sessão
     sem_post(session_sem);
     return NULL;
 }
@@ -69,18 +66,17 @@ int main(int argc, char** argv) {
     int max_games = atoi(argv[2]);
     char* register_pipe_name = argv[3];
 
-    // Ignorar SIGPIPE para evitar crash se o cliente desconectar abruptamente
+    // --- 2. INICIALIZAR O FICHEIRO DE DEBUG ---
+    // Isto evita o SegFault quando o parser tentar fazer logs
+    open_debug_file("server_debug.log"); 
+    // ------------------------------------------
+
     signal(SIGPIPE, SIG_IGN);
 
-    // --- INICIALIZAÇÃO DO SEMÁFORO (Compatível com macOS e Linux) ---
-    // Criar um nome único para o semáforo
+    // --- INICIALIZAÇÃO DO SEMÁFORO ---
     char sem_name[64];
     snprintf(sem_name, sizeof(sem_name), "/pacman_sem_%d", getpid());
 
-    // sem_open cria um semáforo nomeado.
-    // O_CREAT: cria se não existir.
-    // 0644: permissões.
-    // max_games: valor inicial.
     session_sem = sem_open(sem_name, O_CREAT, 0644, max_games);
     
     if (session_sem == SEM_FAILED) {
@@ -88,18 +84,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Desvincular imediatamente para garantir que é removido se o programa crashar.
-    // O semáforo continua válido para este processo enquanto estiver aberto.
     sem_unlink(sem_name); 
-    // ---------------------------------------------------------------
 
-    // Criar FIFO de registo se não existir
     if (mkfifo(register_pipe_name, 0666) == -1) {
-        // Ignorar erro se já existir, senão reportar poderia ser útil em debug
-        // perror("mkfifo"); 
+        // Ignorar erro se já existir
     }
 
-    // Abrir FIFO de registo com O_RDWR para evitar EOF quando não há escritores
     int reg_fd = open(register_pipe_name, O_RDWR);
     if (reg_fd == -1) {
         perror("Erro ao abrir FIFO de registo");
@@ -110,17 +100,14 @@ int main(int argc, char** argv) {
     printf("Servidor PacmanIST iniciado (PID %d). A aguardar conexões...\n", getpid());
 
     while (1) {
-        char buffer[1 + 40 + 40]; // OP + PIPE_REQ + PIPE_NOTIF
+        char buffer[1 + 40 + 40]; 
         
-        // Ler pedido de conexão
         ssize_t n = read(reg_fd, buffer, sizeof(buffer));
         
         if (n > 0 && buffer[0] == OP_CODE_CONNECT) {
-            // Esperar por vaga (semáforo)
             sem_wait(session_sem);
 
             session_args_t* args = malloc(sizeof(session_args_t));
-            // Copiar nomes dos pipes
             memcpy(args->req_pipe, buffer + 1, 40);
             memcpy(args->notif_pipe, buffer + 1 + 40, 40);
             strncpy(args->level_dir, level_dir, 256);
@@ -131,12 +118,16 @@ int main(int argc, char** argv) {
                 free(args);
                 sem_post(session_sem);
             } else {
-                pthread_detach(tid); // Libertar recursos automaticamente ao terminar
+                pthread_detach(tid); 
             }
         }
     }
 
     close(reg_fd);
     sem_close(session_sem);
+    
+    // --- 3. FECHAR O FICHEIRO DE DEBUG ---
+    close_debug_file();
+    
     return 0;
 }

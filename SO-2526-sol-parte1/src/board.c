@@ -510,6 +510,8 @@ void close_debug_file() {
 }
 
 void debug(const char * format, ...) {
+    if (debugfile == NULL) return; // Se o ficheiro não estiver aberto, não faz nada
+    
     va_list args;
     va_start(args, format);
     vfprintf(debugfile, format, args);
