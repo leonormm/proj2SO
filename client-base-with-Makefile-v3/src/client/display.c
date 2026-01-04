@@ -75,15 +75,17 @@ void draw_board_client(Board board) {
 
             // Draw with appropriate color
             switch (ch) {
+                case 'W': // Adicionado: Servidor envia 'W'
                 case '#': // Wall
                     attron(COLOR_PAIR(3));
-                    addch('#');
+                    addch('#'); // Desenha sempre visualmente como '#'
                     attroff(COLOR_PAIR(3));
                     break;
 
+                case 'P': // Adicionado: Servidor envia 'P'
                 case 'C': // Pacman
                     attron(COLOR_PAIR(1) | A_BOLD);
-                    addch('C');
+                    addch('C'); // Desenha sempre visualmente como 'C'
                     attroff(COLOR_PAIR(1) | A_BOLD);
                     break;
 
