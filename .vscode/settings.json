@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.pl": "prolog",
+        "dirent.h": "c",
+        "cstdlib": "c",
+        "stddef.h": "c"
+    }
+}
