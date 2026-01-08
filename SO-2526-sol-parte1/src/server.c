@@ -9,7 +9,7 @@
 #include <signal.h>
 #include <semaphore.h>
 #include "protocol.h"
-#include "board.h"  // <--- 1. ADICIONAR ESTE INCLUDE
+#include "board.h"
 
 // Estrutura para passar argumentos para a thread do cliente
 typedef struct {
@@ -18,45 +18,50 @@ typedef struct {
     char level_dir[256];
 } session_args_t;
 
-// Declaração da função que corre o jogo (estará no game.c modificado)
+// Declaração da função que corre o jogo (está no game.c)
 int run_game_session(int req_fd, int notif_fd, char* level_dir);
 
 // Semáforo para controlar o número máximo de sessões (max_games)
 sem_t *session_sem;
 
 void* client_thread(void* arg) {
+    // 1. Detach para libertar recursos automaticamente ao terminar
+    pthread_detach(pthread_self());
+
     session_args_t* args = (session_args_t*)arg;
     
-    // Abrir pipes do cliente (O_RDWR como pedido)
+    // Abrir pipes do cliente
     int req_fd = open(args->req_pipe, O_RDWR);
     int notif_fd = open(args->notif_pipe, O_RDWR);
 
     if (req_fd == -1 || notif_fd == -1) {
         perror("Erro ao abrir pipes do cliente");
-        free(args);
+        if (req_fd != -1) close(req_fd);
+        if (notif_fd != -1) close(notif_fd);
+        
+        // Se falhou logo no início, devolve a vaga
         sem_post(session_sem);
+        free(args);
         return NULL;
     }
 
-    // Enviar confirmação de conexão (OP_CODE=1 | result=0)
-    char response[2];
-    response[0] = OP_CODE_CONNECT;
-    response[1] = 0; // Sucesso
-    write(notif_fd, response, 2);
-
-    // Iniciar a lógica do jogo
+    // 2. CORRER O JOGO (Bloqueia aqui até o jogo acabar)
     run_game_session(req_fd, notif_fd, args->level_dir);
 
-    // Limpeza
+    // 3. LIMPEZA FINAL (Crucial para permitir novos jogos)
+    printf("Sessão terminada. A libertar vaga...\n");
+    
     close(req_fd);
     close(notif_fd);
     free(args);
 
+    // 4. IMPORTANTE: Libertar a vaga no semáforo
     sem_post(session_sem);
+    
     return NULL;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
     if (argc != 4) {
         fprintf(stderr, "Uso: %s <levels_dir> <max_games> <register_pipe>\n", argv[0]);
         return 1;
@@ -66,45 +71,44 @@ int main(int argc, char** argv) {
     int max_games = atoi(argv[2]);
     char* register_pipe_name = argv[3];
 
-    // --- 2. INICIALIZAR O FICHEIRO DE DEBUG ---
-    // Isto evita o SegFault quando o parser tentar fazer logs
-    open_debug_file("server_debug.log"); 
-    // ------------------------------------------
-
+    // Ignorar SIGPIPE para evitar crashes se o cliente fechar abruptamente
     signal(SIGPIPE, SIG_IGN);
 
-    // --- INICIALIZAÇÃO DO SEMÁFORO ---
+    // Criar semáforo
     char sem_name[64];
-    snprintf(sem_name, sizeof(sem_name), "/pacman_sem_%d", getpid());
-
+    snprintf(sem_name, 64, "/pacman_sem_%d", getpid());
     session_sem = sem_open(sem_name, O_CREAT, 0644, max_games);
-    
     if (session_sem == SEM_FAILED) {
-        perror("Erro ao criar semáforo (sem_open)");
+        perror("Erro ao criar semáforo");
         return 1;
     }
-
     sem_unlink(sem_name); 
 
+    // Criar pipe de registo
+    unlink(register_pipe_name);
     if (mkfifo(register_pipe_name, 0666) == -1) {
-        // Ignorar erro se já existir
+        perror("Erro ao criar pipe de registo");
+        return 1;
     }
 
     int reg_fd = open(register_pipe_name, O_RDWR);
     if (reg_fd == -1) {
-        perror("Erro ao abrir FIFO de registo");
-        sem_close(session_sem);
+        perror("Erro ao abrir pipe de registo");
         return 1;
     }
 
-    printf("Servidor PacmanIST iniciado (PID %d). A aguardar conexões...\n", getpid());
+    printf("Servidor PacmanIST (PID %d) pronto.\n", getpid());
+    printf("Diretoria: %s | Max Jogos: %d\n", level_dir, max_games);
 
     while (1) {
-        char buffer[1 + 40 + 40]; 
+        char buffer[81]; 
         
-        ssize_t n = read(reg_fd, buffer, sizeof(buffer));
+        // Ler pedido de conexão
+        ssize_t n = read(reg_fd, buffer, 81);
         
         if (n > 0 && buffer[0] == OP_CODE_CONNECT) {
+            // Tentar obter vaga. Se max_games for atingido, 
+            // o servidor BLOQUEIA AQUI, fazendo o próximo cliente esperar no 'write'
             sem_wait(session_sem);
 
             session_args_t* args = malloc(sizeof(session_args_t));
@@ -114,20 +118,15 @@ int main(int argc, char** argv) {
 
             pthread_t tid;
             if (pthread_create(&tid, NULL, client_thread, args) != 0) {
-                perror("Erro ao criar thread de cliente");
+                perror("Erro ao criar thread");
                 free(args);
-                sem_post(session_sem);
-            } else {
-                pthread_detach(tid); 
+                sem_post(session_sem); // Devolve vaga se falhar a criar thread
             }
         }
     }
 
     close(reg_fd);
+    unlink(register_pipe_name);
     sem_close(session_sem);
-    
-    // --- 3. FECHAR O FICHEIRO DE DEBUG ---
-    close_debug_file();
-    
     return 0;
 }
