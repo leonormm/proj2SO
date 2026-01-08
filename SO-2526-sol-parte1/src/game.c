@@ -33,11 +33,9 @@ typedef struct {
 
 int thread_shutdown = 0;
 
-// Envio blindado para evitar crashes no cliente
 void send_board_update(int fd, board_t *board, int victory, int game_over) {
     if (!board || fd < 0) return;
     
-    // Dimensões seguras
     int width = (board->board) ? board->width : 1;
     int height = (board->board) ? board->height : 1;
     
@@ -51,7 +49,6 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
 
     int header_size = 1 + sizeof(metadata);
     int map_size = width * height;
-    
     unsigned char *packet = malloc(header_size + map_size);
     if (!packet) return;
 
@@ -61,7 +58,6 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
     if (board->board) {
         for (int i = 0; i < map_size; i++) {
             char content = board->board[i].content;
-            // Normaliza caracteres especiais para envio
             if (content == ' ') {
                 if (board->board[i].has_portal) content = '@';
                 else if (board->board[i].has_dot) content = '.';
@@ -78,22 +74,11 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
 
 void* sender_thread(void *arg) {
     session_context_t *ctx = (session_context_t*) arg;
-    
     while (1) {
         pthread_rwlock_rdlock(&ctx->board->state_lock);
-        if (thread_shutdown) { 
-            pthread_rwlock_unlock(&ctx->board->state_lock); 
-            break; 
-        }
-        
-        if (ctx->board->board) {
-            send_board_update(ctx->notif_fd, ctx->board, 0, 0);
-        }
-        
+        if (thread_shutdown) { pthread_rwlock_unlock(&ctx->board->state_lock); break; }
+        if (ctx->board->board) send_board_update(ctx->notif_fd, ctx->board, 0, 0);
         pthread_rwlock_unlock(&ctx->board->state_lock);
-        
-        // MUDANÇA: Envia atualizações a 20FPS (50ms) independentemente do jogo
-        // Isto faz com que o cliente sinta o jogo mais responsivo
         sleep_ms(50); 
     }
     return NULL;
@@ -103,14 +88,14 @@ void* input_listener_thread(void *arg) {
     session_context_t *ctx = (session_context_t*) arg;
     unsigned char op;
     while (read(ctx->req_fd, &op, 1) > 0) {
-        if (op == (unsigned char)OP_CODE_PLAY) {
+        if (op == OP_CODE_PLAY) {
             char cmd;
             if (read(ctx->req_fd, &cmd, 1) > 0) {
                 pthread_mutex_lock(&ctx->cmd_lock);
                 ctx->next_command = cmd;
                 pthread_mutex_unlock(&ctx->cmd_lock);
             }
-        } else if (op == (unsigned char)OP_CODE_DISCONNECT) {
+        } else if (op == OP_CODE_DISCONNECT) {
             pthread_mutex_lock(&ctx->cmd_lock);
             ctx->next_command = 'Q';
             pthread_mutex_unlock(&ctx->cmd_lock);
@@ -130,43 +115,33 @@ void* pacman_thread(void *arg) {
     while (true) {
         pthread_mutex_lock(&ctx->cmd_lock);
         char cmd = ctx->next_command;
-        ctx->next_command = '\0'; // Consome o comando
+        ctx->next_command = '\0';
         pthread_mutex_unlock(&ctx->cmd_lock);
 
         command_t c_struct = {0};
         command_t* play = NULL;
 
-        // PRIORIDADE AO JOGADOR:
         if (cmd != '\0') {
-            // Se o utilizador carregou numa tecla, usa esse comando
             c_struct.command = cmd;
             c_struct.turns = 1;
             play = &c_struct;
         } else if (pacman->n_moves > 0) {
-            // Se não, usa o movimento automático do ficheiro
             play = &pacman->moves[pacman->current_move % pacman->n_moves];
         }
 
-        // Se houver alguma jogada para fazer (manual ou automática)
         if (play != NULL) {
             if (play->command == 'Q') { *retval = QUIT_GAME; break; }
-            
             pthread_rwlock_wrlock(&board->state_lock);
             int res = move_pacman(board, 0, play);
             pthread_rwlock_unlock(&board->state_lock);
-            
             if (res == REACHED_PORTAL) { *retval = NEXT_LEVEL; break; }
             if (res == DEAD_PACMAN) { *retval = LOAD_BACKUP; break; }
         }
         
-        // Ritmo do jogo (aqui definimos a velocidade de movimento)
         sleep_ms(board->tempo); 
         
         pthread_rwlock_rdlock(&board->state_lock);
-        if (thread_shutdown || !pacman->alive) { 
-            pthread_rwlock_unlock(&board->state_lock); 
-            break; 
-        }
+        if (thread_shutdown || !pacman->alive) { pthread_rwlock_unlock(&board->state_lock); break; }
         pthread_rwlock_unlock(&board->state_lock);
     }
     return (void*) retval;
@@ -188,13 +163,11 @@ void* ghost_thread(void *arg) {
     return NULL;
 }
 
-int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
+// Assinatura atualizada para EX2
+int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id, board_t **registry, pthread_mutex_t *registry_lock) {
     srand((unsigned int)time(NULL));
     DIR* level_dir = opendir(level_dir_path);
-    if (!level_dir) {
-        perror("Erro dir");
-        return -1;
-    }
+    if (!level_dir) return -1;
     
     session_context_t ctx = {.req_fd = req_fd, .notif_fd = notif_fd, .next_command = '\0'};
     pthread_mutex_init(&ctx.cmd_lock, NULL);
@@ -207,10 +180,13 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
         if (entry->d_name[0] == '.' || !strstr(entry->d_name, ".lvl")) continue;
         
         memset(&game_board, 0, sizeof(board_t));
-        
-        // Tenta carregar
         if (load_level(&game_board, entry->d_name, level_dir_path, accumulated_points) != 0) continue;
         
+        // EX2: Registar o tabuleiro ativo no array global do servidor
+        pthread_mutex_lock(registry_lock);
+        registry[slot_id] = &game_board;
+        pthread_mutex_unlock(registry_lock);
+
         ctx.board = &game_board;
         thread_shutdown = 0;
         
@@ -219,7 +195,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
         pthread_create(&snd_tid, NULL, sender_thread, &ctx);
         pthread_create(&pac_tid, NULL, pacman_thread, &ctx);
         
-        // Fantasmas
         pthread_t *g_tids = malloc(game_board.n_ghosts * sizeof(pthread_t));
         for (int i = 0; i < game_board.n_ghosts; i++) {
             ghost_thread_arg_t *a = malloc(sizeof(ghost_thread_arg_t));
@@ -227,38 +202,40 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path) {
             pthread_create(&g_tids[i], NULL, ghost_thread, a);
         }
         
-        // Espera pelo Pacman
-        int *rv; 
-        pthread_join(pac_tid, (void**)&rv);
-        int res = *rv; 
-        free(rv);
+        int *rv; pthread_join(pac_tid, (void**)&rv);
+        int res = *rv; free(rv);
         
-        // Acabou o nível, parar tudo
         pthread_rwlock_wrlock(&game_board.state_lock);
         thread_shutdown = 1;
         pthread_rwlock_unlock(&game_board.state_lock);
         
-        pthread_cancel(in_tid); 
-        pthread_join(in_tid, NULL);
+        pthread_cancel(in_tid); pthread_join(in_tid, NULL);
         pthread_join(snd_tid, NULL);
-        
         for (int i = 0; i < game_board.n_ghosts; i++) pthread_join(g_tids[i], NULL);
         free(g_tids);
         
-        // Verifica resultado
-        if (res == NEXT_LEVEL) {
-            // Guarda pontos para o próximo nível
-            accumulated_points = game_board.pacmans[0].points;
-        } else { 
-            // Morreu
+        if (res == NEXT_LEVEL) accumulated_points = game_board.pacmans[0].points;
+        else { 
             send_board_update(notif_fd, &game_board, 0, 1); 
             session_active = false; 
         }
         
+        // EX2: Desregistar o tabuleiro antes de limpar
+        pthread_mutex_lock(registry_lock);
+        // Mantemos o ponteiro válido até aqui, mas o unload vai limpar o conteúdo.
+        // O ideal é marcar como NULL ou "em transição". Vamos marcar como marcador especial ou NULL.
+        // O marcador 0x1 é usado no server.c, vamos pôr 0x1 para dizer "Ocupado mas sem board válido"
+        registry[slot_id] = (board_t*)0x1;
+        pthread_mutex_unlock(registry_lock);
+
         unload_level(&game_board);
     }
     
-    // Se ganhou tudo
+    // EX2: Limpeza final
+    pthread_mutex_lock(registry_lock);
+    registry[slot_id] = (board_t*)0x1;
+    pthread_mutex_unlock(registry_lock);
+
     if (session_active) { 
         board_t eb = {0};
         pacman_t p = {0};

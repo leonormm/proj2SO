@@ -1,0 +1,6 @@
+=== PACMANIST SERVER LOG (PID 90580) ===
+-- Sessão Slot 0 --
+   Nível: ola
+   Dimensões: 6x6
+   Pacman: (2, 0) | Pontos: 0 | Vidas: Vivo
+   Fantasmas: 2
