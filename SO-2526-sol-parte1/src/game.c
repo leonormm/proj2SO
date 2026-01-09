@@ -89,18 +89,6 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
     free(packet);
 }
 
-void* sender_thread(void *arg) {
-    session_context_t *ctx = (session_context_t*) arg;
-    while (1) {
-        pthread_rwlock_rdlock(&ctx->board->state_lock);
-        if (thread_shutdown) { pthread_rwlock_unlock(&ctx->board->state_lock); break; }
-        if (ctx->board->board) send_board_update(ctx->notif_fd, ctx->board, 0, 0);
-        pthread_rwlock_unlock(&ctx->board->state_lock);
-        sleep_ms(50); 
-    }
-    return NULL;
-}
-
 void* input_listener_thread(void *arg) {
     session_context_t *ctx = (session_context_t*) arg;
     unsigned char op;
@@ -119,6 +107,11 @@ void* input_listener_thread(void *arg) {
             break;
         }
     }
+    pthread_mutex_lock(&ctx->cmd_lock);
+    if(ctx->next_command != 'Q') {
+        ctx->next_command = 'Q';
+    }
+    pthread_mutex_unlock(&ctx->cmd_lock);
     return NULL;
 }
 
@@ -130,6 +123,7 @@ void* pacman_thread(void *arg) {
     *retval = CONTINUE_PLAY;
 
     while (true) {
+        // 1. Obter o próximo comando (input do utilizador ou movimento automático)
         pthread_mutex_lock(&ctx->cmd_lock);
         char cmd = ctx->next_command;
         ctx->next_command = '\0';
@@ -146,19 +140,38 @@ void* pacman_thread(void *arg) {
             play = &pacman->moves[pacman->current_move % pacman->n_moves];
         }
 
+        // 2. Executar o movimento (lógica de jogo)
         if (play != NULL) {
             if (play->command == 'Q') { *retval = QUIT_GAME; break; }
+
+            // Write lock para alterar o estado do tabuleiro
             pthread_rwlock_wrlock(&board->state_lock);
             int res = move_pacman(board, 0, play);
             pthread_rwlock_unlock(&board->state_lock);
+
+            // Verificações de fim de nível ou morte
             if (res == REACHED_PORTAL) { *retval = NEXT_LEVEL; break; }
             if (res == DEAD_PACMAN) { *retval = LOAD_BACKUP; break; }
         }
         
+        // 3. Enviar atualização ao cliente (ALTERADO)
+        // Fazemos isto antes do sleep para o cliente ver o movimento imediatamente.
+        // Usamos read lock porque apenas vamos ler o estado para enviar.
+        pthread_rwlock_rdlock(&board->state_lock);
+        if (!thread_shutdown && pacman->alive) {
+             send_board_update(ctx->notif_fd, board, 0, 0);
+        }
+        pthread_rwlock_unlock(&board->state_lock);
+
+        // 4. Aguardar pelo próximo ciclo (Ritmo do Jogo)
         sleep_ms(board->tempo); 
         
+        // 5. Verificar se o jogo deve terminar
         pthread_rwlock_rdlock(&board->state_lock);
-        if (thread_shutdown || !pacman->alive) { pthread_rwlock_unlock(&board->state_lock); break; }
+        if (thread_shutdown || !pacman->alive) { 
+            pthread_rwlock_unlock(&board->state_lock); 
+            break; 
+        }
         pthread_rwlock_unlock(&board->state_lock);
     }
     return (void*) retval;
@@ -205,9 +218,8 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
         ctx.board = &game_board;
         thread_shutdown = 0;
         
-        pthread_t pac_tid, in_tid, snd_tid;
+        pthread_t pac_tid, in_tid;
         pthread_create(&in_tid, NULL, input_listener_thread, &ctx);
-        pthread_create(&snd_tid, NULL, sender_thread, &ctx);
         pthread_create(&pac_tid, NULL, pacman_thread, &ctx);
         
         pthread_t *g_tids = malloc(game_board.n_ghosts * sizeof(pthread_t));
@@ -225,7 +237,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
         pthread_rwlock_unlock(&game_board.state_lock);
         
         pthread_cancel(in_tid); pthread_join(in_tid, NULL);
-        pthread_join(snd_tid, NULL);
         for (int i = 0; i < game_board.n_ghosts; i++) pthread_join(g_tids[i], NULL);
         free(g_tids);
         
