@@ -13,15 +13,38 @@
 #include "protocol.h"
 #include "board.h"
 
-// --- ESTRUTURAS E GLOBAIS PARA EXERCÍCIO 2 ---
+// --- DEFINIÇÕES DO BUFFER ---
+#define BUFF_SIZE 10 // Tamanho do buffer de pedidos pendentes
 
-// Array global de ponteiros para os tabuleiros ativos
+typedef struct {
+    char req_pipe[40];
+    char notif_pipe[40];
+    char level_dir[256];
+} session_request_t;
+
+typedef struct {
+    session_request_t buf[BUFF_SIZE];
+    int in;
+    int out;
+    sem_t *sem_full;   // ALTERADO: Ponteiro para named semaphore (macOS fix)
+    sem_t *sem_empty;  // ALTERADO: Ponteiro para named semaphore (macOS fix)
+    pthread_mutex_t mutex;
+} request_buffer_t;
+
+request_buffer_t req_buffer;
+
+// --- GLOBAIS ---
 board_t **active_boards;
-pthread_mutex_t boards_lock = PTHREAD_MUTEX_INITIALIZER;
 int max_sessions = 0;
-
-// Flag para o sinal (volatile para evitar otimizações do compilador)
+pthread_mutex_t boards_lock = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t print_stats_request = 0;
+
+// Nomes dos semáforos para limpeza
+char sem_full_name[64];
+char sem_empty_name[64];
+
+// Função declarada no game.c
+int run_game_session(int req_fd, int notif_fd, char* level_dir, int slot_id, board_t **registry, pthread_mutex_t *registry_lock);
 
 // Handler do sinal SIGUSR1
 void handle_signal(int sig) {
@@ -30,102 +53,76 @@ void handle_signal(int sig) {
     }
 }
 
-// Função que escreve o log (Exercício 2)
 void log_active_games() {
     FILE *f = fopen("server_log.txt", "w");
-    if (!f) {
-        perror("Erro ao criar log");
-        return;
-    }
+    if (!f) return;
 
     pthread_mutex_lock(&boards_lock);
-    
     fprintf(f, "=== PACMANIST SERVER LOG (PID %d) ===\n", getpid());
     int active_count = 0;
     
     for (int i = 0; i < max_sessions; i++) {
-        if (active_boards[i] != NULL) {
+        // Marcador 0x1 significa ocupado mas sem board pronto, NULL é livre
+        if (active_boards[i] != NULL && active_boards[i] != (board_t*)0x1) {
             board_t *b = active_boards[i];
-            
-            // Garantir leitura segura (usando o rwlock do board se possível, 
-            // mas aqui faremos leitura direta rápida para evitar deadlocks complexos)
-            
             fprintf(f, "-- Sessão Slot %d --\n", i);
-            fprintf(f, "   Nível: %s\n", b->level_name);
-            fprintf(f, "   Dimensões: %dx%d\n", b->width, b->height);
+            fprintf(f, "   Nível: %s | Dim: %dx%d\n", b->level_name, b->width, b->height);
             if (b->n_pacmans > 0 && b->pacmans) {
-                fprintf(f, "   Pacman: (%d, %d) | Pontos: %d | Vidas: %s\n", 
-                        b->pacmans[0].pos_x, 
-                        b->pacmans[0].pos_y, 
-                        b->pacmans[0].points,
-                        b->pacmans[0].alive ? "Vivo" : "Morto");
+                fprintf(f, "   Pacman: (%d, %d) | Pontos: %d\n", 
+                        b->pacmans[0].pos_x, b->pacmans[0].pos_y, b->pacmans[0].points);
             }
-            fprintf(f, "   Fantasmas: %d\n", b->n_ghosts);
             active_count++;
         }
     }
-    
-    if (active_count == 0) {
-        fprintf(f, "Nenhum jogo ativo no momento.\n");
-    }
-    
+    if (active_count == 0) fprintf(f, "Nenhum jogo ativo.\n");
     pthread_mutex_unlock(&boards_lock);
     fclose(f);
-    printf("Log gerado em 'server_log.txt' (%d jogos ativos).\n", active_count);
 }
 
-// ------------------------------------------------
+// --- TAREFA TRABALHADORA (WORKER) ---
+void* worker_thread(void* arg) {
+    int slot_id = *(int*)arg;
+    free(arg);
 
-typedef struct {
-    char req_pipe[40];
-    char notif_pipe[40];
-    char level_dir[256];
-    int slot_index; // EX2: Saber qual o slot deste cliente
-} session_args_t;
+    // EX2: Bloquear SIGUSR1 nesta thread
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    int s = pthread_sigmask(SIG_BLOCK, &set, NULL);
+    if (s != 0) fprintf(stderr, "Erro ao mascarar sinal na thread %d\n", slot_id);
 
-// Declaração atualizada para receber o slot e os globais
-int run_game_session(int req_fd, int notif_fd, char* level_dir, int slot_id, board_t **registry, pthread_mutex_t *registry_lock);
+    while (1) {
+        // Consumir pedido do buffer
+        session_request_t req;
 
-sem_t *session_sem;
-
-void* client_thread(void* arg) {
-    pthread_detach(pthread_self());
-
-    session_args_t* args = (session_args_t*)arg;
-    
-    int req_fd = open(args->req_pipe, O_RDWR);
-    int notif_fd = open(args->notif_pipe, O_RDWR);
-
-    if (req_fd == -1 || notif_fd == -1) {
-        perror("Erro pipes");
-        if (req_fd != -1) close(req_fd);
-        if (notif_fd != -1) close(notif_fd);
-        sem_post(session_sem);
+        // ALTERADO: Removeu-se o '&' pois já é ponteiro
+        sem_wait(req_buffer.sem_full); 
         
-        // Libertar slot no erro
-        pthread_mutex_lock(&boards_lock);
-        active_boards[args->slot_index] = NULL;
-        pthread_mutex_unlock(&boards_lock);
+        pthread_mutex_lock(&req_buffer.mutex);
+        req = req_buffer.buf[req_buffer.out];
+        req_buffer.out = (req_buffer.out + 1) % BUFF_SIZE;
+        pthread_mutex_unlock(&req_buffer.mutex);
         
-        free(args);
-        return NULL;
+        // ALTERADO: Removeu-se o '&' pois já é ponteiro
+        sem_post(req_buffer.sem_empty);
+
+        // Abrir pipes
+        int req_fd = open(req.req_pipe, O_RDWR);
+        int notif_fd = open(req.notif_pipe, O_RDWR);
+
+        if (req_fd == -1 || notif_fd == -1) {
+            if (req_fd != -1) close(req_fd);
+            if (notif_fd != -1) close(notif_fd);
+            continue;
+        }
+
+        // Executar sessão (Slot fixo para esta thread)
+        run_game_session(req_fd, notif_fd, req.level_dir, slot_id, active_boards, &boards_lock);
+
+        close(req_fd);
+        close(notif_fd);
+        printf("Sessão no slot %d terminou.\n", slot_id);
     }
-
-    // EX2: Passamos o slot e o registo global para o jogo se registar
-    run_game_session(req_fd, notif_fd, args->level_dir, args->slot_index, active_boards, &boards_lock);
-
-    printf("Sessão %d terminada.\n", args->slot_index);
-    
-    close(req_fd);
-    close(notif_fd);
-    
-    // EX2: Limpeza final garantida
-    pthread_mutex_lock(&boards_lock);
-    active_boards[args->slot_index] = NULL;
-    pthread_mutex_unlock(&boards_lock);
-
-    free(args);
-    sem_post(session_sem);
     return NULL;
 }
 
@@ -136,38 +133,56 @@ int main(int argc, char* argv[]) {
     }
 
     char* level_dir = argv[1];
-    max_sessions = atoi(argv[2]); // EX2: Guardar max_sessions globalmente
+    max_sessions = atoi(argv[2]);
     char* register_pipe_name = argv[3];
 
-    // EX2: Inicializar array de boards
+    // Inicialização
     active_boards = calloc(max_sessions, sizeof(board_t*));
+    
+    // Init Buffer
+    req_buffer.in = 0; req_buffer.out = 0;
+    pthread_mutex_init(&req_buffer.mutex, NULL);
+    
+    // ALTERADO: Inicialização de Semáforos com sem_open para macOS
+    snprintf(sem_empty_name, sizeof(sem_empty_name), "/sem_empty_%d", getpid());
+    snprintf(sem_full_name, sizeof(sem_full_name), "/sem_full_%d", getpid());
 
-    // EX2: Configurar Signal Handler
+    // Unlink preventivo caso tenha sobrado de execução anterior
+    sem_unlink(sem_empty_name);
+    sem_unlink(sem_full_name);
+
+    req_buffer.sem_empty = sem_open(sem_empty_name, O_CREAT, 0644, BUFF_SIZE);
+    req_buffer.sem_full  = sem_open(sem_full_name, O_CREAT, 0644, 0);
+
+    if (req_buffer.sem_empty == SEM_FAILED || req_buffer.sem_full == SEM_FAILED) {
+        perror("Erro ao criar semáforos");
+        return 1;
+    }
+
+    // Configurar Sinal
     struct sigaction sa;
     sa.sa_handler = handle_signal;
-    sa.sa_flags = 0; // Faz com que system calls (como read) falhem com EINTR
+    sa.sa_flags = 0; 
     sigemptyset(&sa.sa_mask);
     sigaction(SIGUSR1, &sa, NULL);
-    
     signal(SIGPIPE, SIG_IGN);
 
-    char sem_name[64];
-    snprintf(sem_name, 64, "/pacman_sem_%d", getpid());
-    session_sem = sem_open(sem_name, O_CREAT, 0644, max_sessions);
-    if (session_sem == SEM_FAILED) { perror("Semáforo"); return 1; }
-    sem_unlink(sem_name); 
+    // Criar Pool de Threads
+    pthread_t *workers = malloc(sizeof(pthread_t) * max_sessions);
+    for (int i = 0; i < max_sessions; i++) {
+        int *id = malloc(sizeof(int));
+        *id = i;
+        pthread_create(&workers[i], NULL, worker_thread, id);
+    }
 
     unlink(register_pipe_name);
     if (mkfifo(register_pipe_name, 0666) == -1) { perror("FIFO"); return 1; }
-
     int reg_fd = open(register_pipe_name, O_RDWR);
-    if (reg_fd == -1) { perror("Open FIFO"); return 1; }
+    if (reg_fd == -1) return 1;
 
-    printf("Servidor (PID %d) pronto. Max Jogos: %d\n", getpid(), max_sessions);
-    printf("Para gerar log: kill -SIGUSR1 %d\n", getpid());
+    printf("Servidor (PID %d) pronto. Threads: %d\n", getpid(), max_sessions);
 
     while (1) {
-        // EX2: Verificar se houve pedido de log
         if (print_stats_request) {
             log_active_games();
             print_stats_request = 0;
@@ -176,82 +191,42 @@ int main(int argc, char* argv[]) {
         char buffer[81]; 
         ssize_t n = read(reg_fd, buffer, 81);
         
-        // EX2: Se read foi interrompido pelo sinal, repete o loop
-        if (n == -1 && errno == EINTR) {
-            continue;
-        }
+        if (n == -1 && errno == EINTR) continue;
         
         if (n > 0 && buffer[0] == OP_CODE_CONNECT) {
-            // Tentar reservar vaga no semáforo
-            // Nota: Se o servidor receber sinal enquanto espera aqui,
-            // sem_wait também retorna -1/EINTR. Devemos tratar isso.
-            while (sem_wait(session_sem) == -1) {
+            // Preparar pedido
+            session_request_t new_req;
+            memcpy(new_req.req_pipe, buffer + 1, 40);
+            memcpy(new_req.notif_pipe, buffer + 1 + 40, 40);
+            strncpy(new_req.level_dir, level_dir, 256);
+
+            // Produtor: Inserir no buffer
+            
+            // ALTERADO: Removeu-se o '&'
+            while (sem_wait(req_buffer.sem_empty) == -1) {
                 if (errno == EINTR) {
-                    if (print_stats_request) {
-                        log_active_games();
-                        print_stats_request = 0;
-                    }
+                    if (print_stats_request) { log_active_games(); print_stats_request = 0; }
                     continue;
                 }
-                perror("sem_wait");
-                break;
             }
 
-            // Encontrar slot livre no array para EX2
-            int slot = -1;
-            pthread_mutex_lock(&boards_lock);
-            for(int i=0; i<max_sessions; i++) {
-                if (active_boards[i] == NULL) {
-                    // Marcamos logo como "reservado" (usando um placeholder ou apenas o índice)
-                    // Na verdade, client_thread vai por o ponteiro real.
-                    // Mas para garantir que não damos o mesmo slot, vamos confiar no semáforo
-                    // que garante que há slots livres.
-                    // O active_boards[i] só será preenchido dentro do jogo.
-                    // Mas precisamos garantir que dois threads não apanham o mesmo i.
-                    // O semáforo garante quantidade, não exclusão de índice.
-                    // Precisamos de um array de "slots ocupados" ou usar o active_boards.
-                    // Vamos usar uma logica simples: client_thread é responsável.
-                    // Mas client_thread corre depois. 
-                    // Correção: Vamos assumir que active_boards[i] NULL significa livre.
-                    // Mas o client_thread demora a arrancar.
-                    // Solução rápida: passar apenas o índice e deixar o client_thread gerir.
-                    // Como não estamos a marcar "ocupado" aqui, pode haver race condition nos slots?
-                    // Sim. Vamos corrigir isso marcando com um valor dummy temporário.
-                    active_boards[i] = (board_t*)0x1; // Marcador temporário "Ocupado"
-                    slot = i;
-                    break;
-                }
-            }
-            pthread_mutex_unlock(&boards_lock);
-
-            if (slot == -1) {
-                // Não devia acontecer se o semáforo funciona
-                sem_post(session_sem);
-                continue;
-            }
-
-            session_args_t* args = malloc(sizeof(session_args_t));
-            memcpy(args->req_pipe, buffer + 1, 40);
-            memcpy(args->notif_pipe, buffer + 1 + 40, 40);
-            strncpy(args->level_dir, level_dir, 256);
-            args->slot_index = slot;
-
-            pthread_t tid;
-            if (pthread_create(&tid, NULL, client_thread, args) != 0) {
-                perror("Thread create");
-                
-                pthread_mutex_lock(&boards_lock);
-                active_boards[slot] = NULL;
-                pthread_mutex_unlock(&boards_lock);
-                
-                free(args);
-                sem_post(session_sem);
-            }
+            pthread_mutex_lock(&req_buffer.mutex);
+            req_buffer.buf[req_buffer.in] = new_req;
+            req_buffer.in = (req_buffer.in + 1) % BUFF_SIZE;
+            pthread_mutex_unlock(&req_buffer.mutex);
+            
+            // ALTERADO: Removeu-se o '&'
+            sem_post(req_buffer.sem_full);
         }
     }
 
+    // Limpeza (inalcançável no loop infinito, mas boa prática)
     close(reg_fd);
     unlink(register_pipe_name);
-    sem_close(session_sem);
+    sem_close(req_buffer.sem_empty);
+    sem_close(req_buffer.sem_full);
+    sem_unlink(sem_empty_name);
+    sem_unlink(sem_full_name);
+    
     return 0;
 }

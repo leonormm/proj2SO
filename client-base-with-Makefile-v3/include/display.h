@@ -19,8 +19,6 @@ int terminal_init();
 
 void draw_board_client(Board board);
 
-char* get_board_displayed(board_t* board);
-
 /*Draw the board on the screen*/
 void draw_board(board_t* board, int mode);
 

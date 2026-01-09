@@ -56,6 +56,7 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
     memcpy(packet + 1, metadata, sizeof(metadata));
 
     if (board->board) {
+        // Copia o conteúdo base do tabuleiro
         for (int i = 0; i < map_size; i++) {
             char content = board->board[i].content;
             if (content == ' ') {
@@ -64,6 +65,22 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
             }
             packet[header_size + i] = (unsigned char)content;
         }
+
+        // Sobreposição de Fantasmas com Estado (Charged)
+        // O loop acima copia o que está na grelha (que pode ser 'M').
+        // Aqui garantimos que enviamos 'm' se estiver charged.
+        for (int k = 0; k < board->n_ghosts; k++) {
+            ghost_t *g = &board->ghosts[k];
+            // Verifica limites e se o fantasma está vivo/ativo
+            if (g->pos_x >= 0 && g->pos_x < width && g->pos_y >= 0 && g->pos_y < height) {
+                int idx = g->pos_y * width + g->pos_x;
+                // Se o fantasma estiver charged, enviamos 'm'
+                if (g->charged) {
+                    packet[header_size + idx] = 'm';
+                }
+            }
+        }
+
     } else {
         memset(packet + header_size, ' ', map_size);
     }
@@ -163,7 +180,6 @@ void* ghost_thread(void *arg) {
     return NULL;
 }
 
-// Assinatura atualizada para EX2
 int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id, board_t **registry, pthread_mutex_t *registry_lock) {
     srand((unsigned int)time(NULL));
     DIR* level_dir = opendir(level_dir_path);
@@ -182,7 +198,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
         memset(&game_board, 0, sizeof(board_t));
         if (load_level(&game_board, entry->d_name, level_dir_path, accumulated_points) != 0) continue;
         
-        // EX2: Registar o tabuleiro ativo no array global do servidor
         pthread_mutex_lock(registry_lock);
         registry[slot_id] = &game_board;
         pthread_mutex_unlock(registry_lock);
@@ -220,20 +235,15 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
             session_active = false; 
         }
         
-        // EX2: Desregistar o tabuleiro antes de limpar
         pthread_mutex_lock(registry_lock);
-        // Mantemos o ponteiro válido até aqui, mas o unload vai limpar o conteúdo.
-        // O ideal é marcar como NULL ou "em transição". Vamos marcar como marcador especial ou NULL.
-        // O marcador 0x1 é usado no server.c, vamos pôr 0x1 para dizer "Ocupado mas sem board válido"
         registry[slot_id] = (board_t*)0x1;
         pthread_mutex_unlock(registry_lock);
 
         unload_level(&game_board);
     }
     
-    // EX2: Limpeza final
     pthread_mutex_lock(registry_lock);
-    registry[slot_id] = (board_t*)0x1;
+    registry[slot_id] = NULL; // Slot livre
     pthread_mutex_unlock(registry_lock);
 
     if (session_active) { 
