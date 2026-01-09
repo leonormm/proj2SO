@@ -51,10 +51,11 @@ int main(int argc, char *argv[]) {
 
     if (pacman_connect(req_p, not_p, reg_pipe) != 0) return 1;
 
+    // CORREÇÃO: Inicializar o terminal ANTES de criar a thread que desenha
+    terminal_init();
+
     pthread_t r_tid;
     pthread_create(&r_tid, NULL, receiver_thread, NULL);
-
-    terminal_init();
 
     while (1) {
         pthread_mutex_lock(&mutex);
@@ -69,7 +70,7 @@ int main(int argc, char *argv[]) {
             if (cmd == '\n' || cmd == '\r') continue;
             sleep_ms(50);
         } else {
-            cmd = get_input(); // Agora é rápido devido ao timeout(20)
+            cmd = get_input(); 
         }
 
         if (cmd == 'Q') break;
@@ -79,6 +80,8 @@ int main(int argc, char *argv[]) {
     pacman_disconnect();
     pthread_join(r_tid, NULL);
     if (cmd_fp) fclose(cmd_fp);
+    
+    // Limpa o ecrã final e restaura o terminal
     terminal_cleanup();
     return 0;
 }

@@ -14,7 +14,7 @@
 #include "board.h"
 
 // --- DEFINIÇÕES DO BUFFER ---
-#define BUFF_SIZE 10 // Tamanho do buffer de pedidos pendentes
+#define BUFF_SIZE 10
 
 typedef struct {
     char req_pipe[40];
@@ -26,8 +26,8 @@ typedef struct {
     session_request_t buf[BUFF_SIZE];
     int in;
     int out;
-    sem_t *sem_full;   // ALTERADO: Ponteiro para named semaphore (macOS fix)
-    sem_t *sem_empty;  // ALTERADO: Ponteiro para named semaphore (macOS fix)
+    sem_t *sem_full;
+    sem_t *sem_empty;
     pthread_mutex_t mutex;
 } request_buffer_t;
 
@@ -35,18 +35,20 @@ request_buffer_t req_buffer;
 
 // --- GLOBAIS ---
 board_t **active_boards;
+// NOVO: Array para guardar nomes dos clientes ativos e evitar duplicados
+char **active_player_names; 
+pthread_mutex_t active_players_lock = PTHREAD_MUTEX_INITIALIZER;
+
 int max_sessions = 0;
 pthread_mutex_t boards_lock = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t print_stats_request = 0;
 
-// Nomes dos semáforos para limpeza
 char sem_full_name[64];
 char sem_empty_name[64];
 
 // Função declarada no game.c
 int run_game_session(int req_fd, int notif_fd, char* level_dir, int slot_id, board_t **registry, pthread_mutex_t *registry_lock);
 
-// Handler do sinal SIGUSR1
 void handle_signal(int sig) {
     if (sig == SIGUSR1) {
         print_stats_request = 1;
@@ -62,7 +64,6 @@ void log_active_games() {
     int active_count = 0;
     
     for (int i = 0; i < max_sessions; i++) {
-        // Marcador 0x1 significa ocupado mas sem board pronto, NULL é livre
         if (active_boards[i] != NULL && active_boards[i] != (board_t*)0x1) {
             board_t *b = active_boards[i];
             fprintf(f, "-- Sessão Slot %d --\n", i);
@@ -84,18 +85,14 @@ void* worker_thread(void* arg) {
     int slot_id = *(int*)arg;
     free(arg);
 
-    // EX2: Bloquear SIGUSR1 nesta thread
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGUSR1);
-    int s = pthread_sigmask(SIG_BLOCK, &set, NULL);
-    if (s != 0) fprintf(stderr, "Erro ao mascarar sinal na thread %d\n", slot_id);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     while (1) {
-        // Consumir pedido do buffer
         session_request_t req;
 
-        // ALTERADO: Removeu-se o '&' pois já é ponteiro
         sem_wait(req_buffer.sem_full); 
         
         pthread_mutex_lock(&req_buffer.mutex);
@@ -103,24 +100,52 @@ void* worker_thread(void* arg) {
         req_buffer.out = (req_buffer.out + 1) % BUFF_SIZE;
         pthread_mutex_unlock(&req_buffer.mutex);
         
-        // ALTERADO: Removeu-se o '&' pois já é ponteiro
         sem_post(req_buffer.sem_empty);
 
-        // Abrir pipes
+        // --- VERIFICAÇÃO DE DUPLICADOS ---
+        int is_duplicate = 0;
+        pthread_mutex_lock(&active_players_lock);
+        for (int i = 0; i < max_sessions; i++) {
+            if (active_player_names[i][0] != '\0' && strncmp(active_player_names[i], req.req_pipe, 40) == 0) {
+                is_duplicate = 1;
+                break;
+            }
+        }
+
+        if (is_duplicate) {
+            pthread_mutex_unlock(&active_players_lock);
+            printf("Rejeitado cliente duplicado: %s\n", req.req_pipe);
+            // Abrir e fechar pipes para desbloquear o cliente (que falhará a seguir)
+            int fd1 = open(req.req_pipe, O_RDWR);
+            int fd2 = open(req.notif_pipe, O_RDWR);
+            if (fd1 != -1) close(fd1);
+            if (fd2 != -1) close(fd2);
+            continue;
+        }
+
+        // Registar cliente neste slot (podemos usar o slot_id desta thread ou procurar livre)
+        // Como o slot_id é fixo por thread e a thread só corre um jogo de cada vez, usamos active_player_names[slot_id]
+        strncpy(active_player_names[slot_id], req.req_pipe, 40);
+        pthread_mutex_unlock(&active_players_lock);
+        // ---------------------------------
+
         int req_fd = open(req.req_pipe, O_RDWR);
         int notif_fd = open(req.notif_pipe, O_RDWR);
 
         if (req_fd == -1 || notif_fd == -1) {
             if (req_fd != -1) close(req_fd);
             if (notif_fd != -1) close(notif_fd);
-            continue;
+        } else {
+            run_game_session(req_fd, notif_fd, req.level_dir, slot_id, active_boards, &boards_lock);
+            close(req_fd);
+            close(notif_fd);
         }
 
-        // Executar sessão (Slot fixo para esta thread)
-        run_game_session(req_fd, notif_fd, req.level_dir, slot_id, active_boards, &boards_lock);
-
-        close(req_fd);
-        close(notif_fd);
+        // Limpar registo do cliente
+        pthread_mutex_lock(&active_players_lock);
+        memset(active_player_names[slot_id], 0, 40);
+        pthread_mutex_unlock(&active_players_lock);
+        
         printf("Sessão no slot %d terminou.\n", slot_id);
     }
     return NULL;
@@ -136,18 +161,20 @@ int main(int argc, char* argv[]) {
     max_sessions = atoi(argv[2]);
     char* register_pipe_name = argv[3];
 
-    // Inicialização
     active_boards = calloc(max_sessions, sizeof(board_t*));
     
-    // Init Buffer
+    // NOVO: Inicializar array de nomes ativos
+    active_player_names = calloc(max_sessions, sizeof(char*));
+    for(int i = 0; i < max_sessions; i++) {
+        active_player_names[i] = calloc(1, 40);
+    }
+    
     req_buffer.in = 0; req_buffer.out = 0;
     pthread_mutex_init(&req_buffer.mutex, NULL);
     
-    // ALTERADO: Inicialização de Semáforos com sem_open para macOS
     snprintf(sem_empty_name, sizeof(sem_empty_name), "/sem_empty_%d", getpid());
     snprintf(sem_full_name, sizeof(sem_full_name), "/sem_full_%d", getpid());
 
-    // Unlink preventivo caso tenha sobrado de execução anterior
     sem_unlink(sem_empty_name);
     sem_unlink(sem_full_name);
 
@@ -159,7 +186,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Configurar Sinal
     struct sigaction sa;
     sa.sa_handler = handle_signal;
     sa.sa_flags = 0; 
@@ -167,7 +193,6 @@ int main(int argc, char* argv[]) {
     sigaction(SIGUSR1, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
 
-    // Criar Pool de Threads
     pthread_t *workers = malloc(sizeof(pthread_t) * max_sessions);
     for (int i = 0; i < max_sessions; i++) {
         int *id = malloc(sizeof(int));
@@ -194,15 +219,11 @@ int main(int argc, char* argv[]) {
         if (n == -1 && errno == EINTR) continue;
         
         if (n > 0 && buffer[0] == OP_CODE_CONNECT) {
-            // Preparar pedido
             session_request_t new_req;
             memcpy(new_req.req_pipe, buffer + 1, 40);
             memcpy(new_req.notif_pipe, buffer + 1 + 40, 40);
             strncpy(new_req.level_dir, level_dir, 256);
 
-            // Produtor: Inserir no buffer
-            
-            // ALTERADO: Removeu-se o '&'
             while (sem_wait(req_buffer.sem_empty) == -1) {
                 if (errno == EINTR) {
                     if (print_stats_request) { log_active_games(); print_stats_request = 0; }
@@ -215,12 +236,10 @@ int main(int argc, char* argv[]) {
             req_buffer.in = (req_buffer.in + 1) % BUFF_SIZE;
             pthread_mutex_unlock(&req_buffer.mutex);
             
-            // ALTERADO: Removeu-se o '&'
             sem_post(req_buffer.sem_full);
         }
     }
 
-    // Limpeza (inalcançável no loop infinito, mas boa prática)
     close(reg_fd);
     unlink(register_pipe_name);
     sem_close(req_buffer.sem_empty);
