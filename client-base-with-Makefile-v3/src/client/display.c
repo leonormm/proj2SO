@@ -6,26 +6,46 @@
 #include <ncurses.h>
 
 int terminal_init() {
-    setenv("ESCDELAY", "25", 1);
+    // Initialize ncurses mode
     initscr();
+
+    // Disable line buffering - get characters immediately
     cbreak();
+
+    // Don't echo typed characters to the screen
     noecho();
+
+    // Enable special keys (arrow keys, function keys, etc.)
     keypad(stdscr, TRUE);
-    timeout(20); 
+
+    timeout(1000);
+
+    // Make getch() non-blocking (return ERR if no input)
+    //nodelay(stdscr, TRUE); // Uncomment if non-blocking input is desired
+
+    // Hide the cursor
     curs_set(0);
+
+    // Enable color if terminal supports it
     if (has_colors()) {
         start_color();
-        init_pair(1, COLOR_YELLOW, COLOR_BLACK);
-        init_pair(2, COLOR_RED, COLOR_BLACK);
-        init_pair(3, COLOR_BLUE, COLOR_BLACK);
-        init_pair(4, COLOR_WHITE, COLOR_BLACK);
-        init_pair(5, COLOR_GREEN, COLOR_BLACK);
-        init_pair(6, COLOR_MAGENTA, COLOR_BLACK);
-        init_pair(7, COLOR_CYAN, COLOR_BLACK);
+
+        // Define color pairs (foreground, background)
+        init_pair(1, COLOR_YELLOW, COLOR_BLACK);  // Pacman
+        init_pair(2, COLOR_RED, COLOR_BLACK);     // Ghosts
+        init_pair(3, COLOR_BLUE, COLOR_BLACK);    // Walls
+        init_pair(4, COLOR_WHITE, COLOR_BLACK);   // Points/dots
+        init_pair(5, COLOR_GREEN, COLOR_BLACK);   // UI elements
+        init_pair(6, COLOR_MAGENTA, COLOR_BLACK); // Extra
+        init_pair(7, COLOR_CYAN, COLOR_BLACK);    // Extra
     }
+
+    // Clear the screen
     clear();
+
     return 0;
 }
+
 
 void draw_board_client(Board board) {
     clear();
