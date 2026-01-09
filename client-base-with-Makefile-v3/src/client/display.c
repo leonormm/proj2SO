@@ -6,6 +6,7 @@
 #include <ncurses.h>
 
 int terminal_init() {
+    setenv("ESCDELAY", "25", 1);
     initscr();
     cbreak();
     noecho();
@@ -71,6 +72,18 @@ void draw_board_client(Board board) {
 }
 
 void refresh_screen() { refresh(); }
-char get_input() { int ch = getch(); return (ch == ERR) ? '\0' : toupper((char)ch); }
-void terminal_cleanup() { endwin(); }
-void set_timeout(int ms) { timeout(ms); }
+
+char get_input() { 
+    int ch = getch(); 
+    return (ch == ERR) ? '\0' : toupper((char)ch); 
+}
+
+void terminal_cleanup() { 
+    clear();
+    refresh();
+    endwin();
+}
+
+void set_timeout(int ms) { 
+    timeout(ms); 
+}
