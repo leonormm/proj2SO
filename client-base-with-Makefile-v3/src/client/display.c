@@ -50,7 +50,7 @@ int terminal_init() {
 void draw_board_client(Board board) {
     clear();
     attron(COLOR_PAIR(5));
-    mvprintw(0, 0, "=== PACMAN CLIENT ===");
+    mvprintw(0, 0, "=== PACMAN GAME ===");
     if (board.game_over) mvprintw(1, 0, " GAME OVER ");
     else if (board.victory) mvprintw(1, 0, " VICTORY ");
     else mvprintw(1, 0, "Use W/A/S/D to move | Q to quit");
@@ -91,7 +91,9 @@ void draw_board_client(Board board) {
     refresh();
 }
 
-void refresh_screen() { refresh(); }
+void refresh_screen() { 
+    refresh(); 
+}
 
 char get_input() { 
     int ch = getch(); 
