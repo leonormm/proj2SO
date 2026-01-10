@@ -226,7 +226,7 @@ int main(int argc, char* argv[]) {
     int reg_fd = open(register_pipe_name, O_RDWR);
     if (reg_fd == -1) return 1;
 
-    printf("Servidor (PID %d) . Max jogadores: %d\n", getpid(), max_sessions);
+    printf("Servidor (PID %d) pronto. Max jogadores: %d\n", getpid(), max_sessions);
 
     while (1) {
         if (print_stats_request) {
