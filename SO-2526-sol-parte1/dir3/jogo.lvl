@@ -1,0 +1,37 @@
+# DIM: dimensoes da matriz do nivel (Largura Altura)
+DIM 30 30
+# TEMPO: duracao de cada jogada em milissegundos
+TEMPO 10
+# MON: nomes dos ficheiros de monstros (2 monstros)
+MON m1.m m2.m
+# Mapa do jogo (X=parede, o=vazio/ponto, @=portal)
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+XXooooooooooooXXoooooooooooooX
+XoXXXXXXXXXXXoXXoXXXXXXXXXXXoX
+XoXooooooooooooooooooooooooXoX
+XoXoXXXXXXXXXXXXXXoXXXXXXoXoXo
+XoXooooooooooooooooooooooooXoX
+XoXXXXXXXXoXXXXXXXXoXXXXXXXXoX
+XooooooooooooooooooooooooooooX
+XXXXXXoXXXXXXXXXXXXXXoXXXXXXXX
+XooooooooooooooooooooooooooooX
+XoXXXXXXXXoXXXXXXXXoXXXXXXXXoX
+XoooooooooooooXXoooooooooooooX
+XoXXXXXXXXXXXoXXoXXXXXXXXXXXoX
+XooooooooooooooooooooooooooooX
+Xooooooooooooo@@oooooooooooooX
+XooooooooooooooooooooooooooooX
+XoXXXXXXXXXXXoXXoXXXXXXXXXXXoX
+XoooooooooooooXXoooooooooooooX
+XoXXXXXXXXoXXXXXXXXoXXXXXXXXoX
+XooooooooooooooooooooooooooooX
+XXXXXXoXXXXXXXXXXXXXXoXXXXXXXX
+XooooooooooooooooooooooooooooX
+XoXXXXXXXXoXXXXXXXXoXXXXXXXXoX
+XoXooooooooooooooooooooooooXoX
+XoXoXXXXXXoXXXXXXXXXXXXXXoXoXo
+XoXooooooooooooooooooooooooXoX
+XoXXXXXXXXXXXoXXoXXXXXXXXXXXoX
+XoooooooooooooXXoooooooooooooX
+XooooooooooooooooooooooooooooX
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
