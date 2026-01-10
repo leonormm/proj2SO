@@ -33,6 +33,12 @@ typedef struct {
 
 request_buffer_t req_buffer;
 
+typedef struct {
+    int slot_id;
+    int points;
+    board_t *board;
+} game_entry_t;
+
 // --- GLOBAIS ---
 board_t **active_boards;
 // NOVO: Array para guardar nomes dos clientes ativos e evitar duplicados
@@ -55,29 +61,64 @@ void handle_signal(int sig) {
     }
 }
 
+int compare_scores(const void *a, const void *b) {
+    game_entry_t *entryA = (game_entry_t *)a;
+    game_entry_t *entryB = (game_entry_t *)b;
+    return entryB->points - entryA->points;
+}
+
 void log_active_games() {
     FILE *f = fopen("server_log.txt", "w");
     if (!f) return;
 
     pthread_mutex_lock(&boards_lock);
-    fprintf(f, "=== PACMANIST SERVER LOG (PID %d) ===\n", getpid());
-    int active_count = 0;
     
+    // 1. Recolher todos os jogos ativos para um array temporário
+    // Alocamos espaço para o máximo possível de sessões
+    game_entry_t *entries = malloc(sizeof(game_entry_t) * max_sessions);
+    int count = 0;
+
     for (int i = 0; i < max_sessions; i++) {
+        // Verifica se o slot tem um jogo válido e ativo
         if (active_boards[i] != NULL && active_boards[i] != (board_t*)0x1) {
-            board_t *b = active_boards[i];
-            fprintf(f, "-- Sessão Slot %d --\n", i);
-            fprintf(f, "   Nível: %s | Dim: %dx%d\n", b->level_name, b->width, b->height);
-            if (b->n_pacmans > 0 && b->pacmans) {
-                fprintf(f, "   Pacman: (%d, %d) | Pontos: %d\n", 
-                        b->pacmans[0].pos_x, b->pacmans[0].pos_y, b->pacmans[0].points);
+            entries[count].slot_id = i;
+            entries[count].board = active_boards[i];
+            
+            // Assume-se sempre o pacman 0 (single player por sessão)
+            if (active_boards[i]->pacmans && active_boards[i]->n_pacmans > 0) {
+                entries[count].points = active_boards[i]->pacmans[0].points;
+            } else {
+                entries[count].points = 0;
             }
-            active_count++;
+            count++;
         }
     }
-    if (active_count == 0) fprintf(f, "Nenhum jogo ativo.\n");
+
+    // 2. Ordenar por pontuação (Decrescente)
+    qsort(entries, count, sizeof(game_entry_t), compare_scores);
+
+    // 3. Escrever os Top 5 (ou menos, se houver menos jogos)
+    fprintf(f, "=== PACMANIST SERVER LOG (PID %d) ===\n", getpid());
+    fprintf(f, "Jogos Ativos: %d | A mostrar: Top 5\n\n", count);
+
+    int limit = (count < 5) ? count : 5;
+    
+    for (int i = 0; i < limit; i++) {
+        board_t *b = entries[i].board;
+        fprintf(f, "-- Rank %d [Slot %d] --\n", i + 1, entries[i].slot_id);
+        fprintf(f, "   Nível: %s | Dim: %dx%d\n", b->level_name, b->width, b->height);
+        fprintf(f, "   Pacman Pos: (%d, %d)\n", b->pacmans[0].pos_x, b->pacmans[0].pos_y);
+        fprintf(f, "   PONTOS: %d \n\n", entries[i].points);
+    }
+    
+    if (count == 0) fprintf(f, "Nenhum jogo ativo no momento.\n");
+
+    free(entries);
     pthread_mutex_unlock(&boards_lock);
     fclose(f);
+    
+    // Mensagem no terminal do servidor para confirmar que o log foi feito
+    printf("Log gerado: Top %d jogos guardados em server_log.txt\n", limit);
 }
 
 // --- TAREFA TRABALHADORA (WORKER) ---

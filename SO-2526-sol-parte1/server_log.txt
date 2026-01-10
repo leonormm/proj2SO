@@ -1,6 +1,28 @@
-=== PACMANIST SERVER LOG (PID 90580) ===
--- Sessão Slot 0 --
-   Nível: ola
-   Dimensões: 6x6
-   Pacman: (2, 0) | Pontos: 0 | Vidas: Vivo
-   Fantasmas: 2
+=== PACMANIST SERVER LOG (PID 51573) ===
+Jogos Ativos: 6 | A mostrar: Top 5
+
+-- Rank 1 [Slot 0] --
+   Nível: idk | Dim: 9x6
+   Pacman Pos: (3, 1)
+   *** PONTOS: 2 ***
+
+-- Rank 2 [Slot 1] --
+   Nível: idk | Dim: 9x6
+   Pacman Pos: (3, 1)
+   *** PONTOS: 2 ***
+
+-- Rank 3 [Slot 2] --
+   Nível: idk | Dim: 9x6
+   Pacman Pos: (3, 1)
+   *** PONTOS: 2 ***
+
+-- Rank 4 [Slot 3] --
+   Nível: idk | Dim: 9x6
+   Pacman Pos: (2, 1)
+   *** PONTOS: 1 ***
+
+-- Rank 5 [Slot 4] --
+   Nível: idk | Dim: 9x6
+   Pacman Pos: (2, 1)
+   *** PONTOS: 1 ***
+
