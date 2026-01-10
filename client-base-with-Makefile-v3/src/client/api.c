@@ -39,7 +39,6 @@ int pacman_connect(const char *req_pipe, const char *notif_pipe, const char *ser
     // Enviar pedido de conexão
     int s_fd = open(server_pipe, O_WRONLY);
     if (s_fd == -1) {
-        // Se falhar aqui, o servidor provavelmente não está a correr
         return -1;
     }
 
@@ -50,12 +49,6 @@ int pacman_connect(const char *req_pipe, const char *notif_pipe, const char *ser
     memcpy(buf + 41, notif_pipe, 40);
     write(s_fd, buf, 81);
     close(s_fd);
-
-    // ABRIR PIPES COM O CLIENTE
-    // Se o servidor estiver cheio (max_games atingido), ele fica bloqueado no sem_wait
-    // e não chega à parte de abrir estes pipes.
-    // Consequentemente, o cliente vai BLOQUEAR nestes open() até haver vaga.
-    // Isto é o comportamento "fila de espera" correto.
     
     req_fd = open(req_pipe, O_WRONLY); 
     notif_fd = open(notif_pipe, O_RDONLY);

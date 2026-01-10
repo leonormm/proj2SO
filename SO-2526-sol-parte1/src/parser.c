@@ -196,8 +196,10 @@ int read_pacman(board_t* board, int points) {
         }
     }
 
+    // end of the file contains the moves
     pacman->current_move = 0;
     
+    // command here still holds the previous line
     int move = 0;
     while (read > 0 && move < MAX_MOVES) {
         if (command[0]== '#' || command[0] == '\0') continue;

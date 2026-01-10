@@ -17,7 +17,6 @@
 #define QUIT_GAME 2
 #define LOAD_BACKUP 3 
 
-// Estrutura de contexto da sessão
 typedef struct {
     board_t *board;
     int req_fd;
@@ -25,19 +24,15 @@ typedef struct {
     int game_exit_code;
     char next_command;
     pthread_mutex_t cmd_lock;
-    // ALTERAÇÃO: Flag local para controlar o fim desta sessão específica
     volatile int thread_shutdown; 
 } session_context_t;
 
-// Estrutura de argumentos para a thread dos fantasmas
 typedef struct {
     board_t *board;
     int ghost_index;
-    // ALTERAÇÃO: Ponteiro para a flag de shutdown da sessão a que este fantasma pertence
     volatile int *shutdown_ptr;
 } ghost_thread_arg_t;
 
-// [REMOVIDO] int thread_shutdown = 0; // A variável global foi removida
 
 void send_board_update(int fd, board_t *board, int victory, int game_over) {
     if (!board || fd < 0) return;
@@ -62,7 +57,6 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
     memcpy(packet + 1, metadata, sizeof(metadata));
 
     if (board->board) {
-        // Copia o conteúdo base do tabuleiro
         for (int i = 0; i < map_size; i++) {
             char content = board->board[i].content;
             if (content == ' ') {
@@ -72,13 +66,10 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
             packet[header_size + i] = (unsigned char)content;
         }
 
-        // Sobreposição de Fantasmas com Estado (Charged)
         for (int k = 0; k < board->n_ghosts; k++) {
             ghost_t *g = &board->ghosts[k];
-            // Verifica limites e se o fantasma está vivo/ativo
             if (g->pos_x >= 0 && g->pos_x < width && g->pos_y >= 0 && g->pos_y < height) {
                 int idx = g->pos_y * width + g->pos_x;
-                // Se o fantasma estiver charged, enviamos 'm'
                 if (g->charged) {
                     packet[header_size + idx] = 'm';
                 }
@@ -127,7 +118,6 @@ void* pacman_thread(void *arg) {
     *retval = CONTINUE_PLAY;
 
     while (true) {
-        // 1. Obter o próximo comando
         pthread_mutex_lock(&ctx->cmd_lock);
         char cmd = ctx->next_command;
         ctx->next_command = '\0';
@@ -144,11 +134,9 @@ void* pacman_thread(void *arg) {
             play = &pacman->moves[pacman->current_move % pacman->n_moves];
         }
 
-        // 2. Executar o movimento
         if (play != NULL) {
             if (play->command == 'Q') { *retval = QUIT_GAME; break; }
 
-            // Write lock para alterar o estado do tabuleiro
             pthread_rwlock_wrlock(&board->state_lock);
             int res = move_pacman(board, 0, play);
             pthread_rwlock_unlock(&board->state_lock);
@@ -157,20 +145,15 @@ void* pacman_thread(void *arg) {
             if (res == DEAD_PACMAN) { *retval = LOAD_BACKUP; break; }
         }
         
-        // 3. Enviar atualização ao cliente
         pthread_rwlock_rdlock(&board->state_lock);
-        // ALTERAÇÃO: Usa ctx->thread_shutdown em vez da global
         if (!ctx->thread_shutdown && pacman->alive) {
              send_board_update(ctx->notif_fd, board, 0, 0);
         }
         pthread_rwlock_unlock(&board->state_lock);
 
-        // 4. Aguardar pelo próximo ciclo
         sleep_ms(board->tempo); 
         
-        // 5. Verificar se o jogo deve terminar
         pthread_rwlock_rdlock(&board->state_lock);
-        // ALTERAÇÃO: Usa ctx->thread_shutdown em vez da global
         if (ctx->thread_shutdown || !pacman->alive) { 
             pthread_rwlock_unlock(&board->state_lock); 
             break; 
@@ -186,7 +169,6 @@ void* ghost_thread(void *arg) {
     int ghost_ind = ghost_arg->ghost_index;
     ghost_t* ghost = &board->ghosts[ghost_ind];
     
-    // ALTERAÇÃO: Obtém o ponteiro para a flag de shutdown
     volatile int *shutdown_ptr = ghost_arg->shutdown_ptr;
     
     free(ghost_arg);
@@ -194,7 +176,6 @@ void* ghost_thread(void *arg) {
         sleep_ms(board->tempo * (1 + ghost->passo));
         pthread_rwlock_wrlock(&board->state_lock);
         
-        // ALTERAÇÃO: Verifica o valor apontado pelo ponteiro
         if (*shutdown_ptr) { 
             pthread_rwlock_unlock(&board->state_lock); 
             break; 
@@ -211,7 +192,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
     DIR* level_dir = opendir(level_dir_path);
     if (!level_dir) return -1;
     
-    // ALTERAÇÃO: Inicializa a flag thread_shutdown a 0
     session_context_t ctx = {
         .req_fd = req_fd, 
         .notif_fd = notif_fd, 
@@ -236,8 +216,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
         pthread_mutex_unlock(registry_lock);
 
         ctx.board = &game_board;
-        
-        // ALTERAÇÃO: Reseta a flag local para o novo nível
         ctx.thread_shutdown = 0;
         
         pthread_t pac_tid, in_tid;
@@ -249,7 +227,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
             ghost_thread_arg_t *a = malloc(sizeof(ghost_thread_arg_t));
             a->board = &game_board; 
             a->ghost_index = i;
-            // ALTERAÇÃO: Passa o endereço da flag local da sessão
             a->shutdown_ptr = &ctx.thread_shutdown; 
             
             pthread_create(&g_tids[i], NULL, ghost_thread, a);
@@ -259,7 +236,6 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
         int res = *rv; free(rv);
         
         pthread_rwlock_wrlock(&game_board.state_lock);
-        // ALTERAÇÃO: Sinaliza shutdown apenas nesta sessão
         ctx.thread_shutdown = 1; 
         pthread_rwlock_unlock(&game_board.state_lock);
         
@@ -281,7 +257,7 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
     }
     
     pthread_mutex_lock(registry_lock);
-    registry[slot_id] = NULL; // Slot livre
+    registry[slot_id] = NULL;
     pthread_mutex_unlock(registry_lock);
 
     if (session_active) { 

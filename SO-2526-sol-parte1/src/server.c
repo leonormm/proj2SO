@@ -13,7 +13,6 @@
 #include "protocol.h"
 #include "board.h"
 
-// --- DEFINIÇÕES DO BUFFER ---
 #define BUFF_SIZE 10
 
 typedef struct {
@@ -39,9 +38,8 @@ typedef struct {
     board_t *board;
 } game_entry_t;
 
-// --- GLOBAIS ---
+
 board_t **active_boards;
-// NOVO: Array para guardar nomes dos clientes ativos e evitar duplicados
 char **active_player_names; 
 pthread_mutex_t active_players_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -52,7 +50,6 @@ volatile sig_atomic_t print_stats_request = 0;
 char sem_full_name[64];
 char sem_empty_name[64];
 
-// Função declarada no game.c
 int run_game_session(int req_fd, int notif_fd, char* level_dir, int slot_id, board_t **registry, pthread_mutex_t *registry_lock);
 
 void handle_signal(int sig) {
@@ -73,18 +70,14 @@ void log_active_games() {
 
     pthread_mutex_lock(&boards_lock);
     
-    // 1. Recolher todos os jogos ativos para um array temporário
-    // Alocamos espaço para o máximo possível de sessões
     game_entry_t *entries = malloc(sizeof(game_entry_t) * max_sessions);
     int count = 0;
 
     for (int i = 0; i < max_sessions; i++) {
-        // Verifica se o slot tem um jogo válido e ativo
         if (active_boards[i] != NULL && active_boards[i] != (board_t*)0x1) {
             entries[count].slot_id = i;
             entries[count].board = active_boards[i];
             
-            // Assume-se sempre o pacman 0 (single player por sessão)
             if (active_boards[i]->pacmans && active_boards[i]->n_pacmans > 0) {
                 entries[count].points = active_boards[i]->pacmans[0].points;
             } else {
@@ -94,10 +87,8 @@ void log_active_games() {
         }
     }
 
-    // 2. Ordenar por pontuação (Decrescente)
     qsort(entries, count, sizeof(game_entry_t), compare_scores);
 
-    // 3. Escrever os Top 5 (ou menos, se houver menos jogos)
     fprintf(f, "=== PACMANIST SERVER LOG (PID %d) ===\n", getpid());
     fprintf(f, "Jogos Ativos: %d | A mostrar: Top 5\n\n", count);
 
@@ -116,12 +107,8 @@ void log_active_games() {
     free(entries);
     pthread_mutex_unlock(&boards_lock);
     fclose(f);
-    
-    // Mensagem no terminal do servidor para confirmar que o log foi feito
-    printf("Log gerado: Top %d jogos guardados em server_log.txt\n", limit);
 }
 
-// --- TAREFA TRABALHADORA (WORKER) ---
 void* worker_thread(void* arg) {
     int slot_id = *(int*)arg;
     free(arg);
@@ -143,7 +130,6 @@ void* worker_thread(void* arg) {
         
         sem_post(req_buffer.sem_empty);
 
-        // --- VERIFICAÇÃO DE DUPLICADOS ---
         int is_duplicate = 0;
         pthread_mutex_lock(&active_players_lock);
         for (int i = 0; i < max_sessions; i++) {
@@ -156,7 +142,6 @@ void* worker_thread(void* arg) {
         if (is_duplicate) {
             pthread_mutex_unlock(&active_players_lock);
             printf("Rejeitado cliente duplicado: %s\n", req.req_pipe);
-            // Abrir e fechar pipes para desbloquear o cliente (que falhará a seguir)
             int fd1 = open(req.req_pipe, O_RDWR);
             int fd2 = open(req.notif_pipe, O_RDWR);
             if (fd1 != -1) close(fd1);
@@ -164,11 +149,8 @@ void* worker_thread(void* arg) {
             continue;
         }
 
-        // Registar cliente neste slot (podemos usar o slot_id desta thread ou procurar livre)
-        // Como o slot_id é fixo por thread e a thread só corre um jogo de cada vez, usamos active_player_names[slot_id]
         strncpy(active_player_names[slot_id], req.req_pipe, 40);
         pthread_mutex_unlock(&active_players_lock);
-        // ---------------------------------
 
         int req_fd = open(req.req_pipe, O_RDWR);
         int notif_fd = open(req.notif_pipe, O_RDWR);
@@ -182,7 +164,6 @@ void* worker_thread(void* arg) {
             close(notif_fd);
         }
 
-        // Limpar registo do cliente
         pthread_mutex_lock(&active_players_lock);
         memset(active_player_names[slot_id], 0, 40);
         pthread_mutex_unlock(&active_players_lock);
@@ -204,7 +185,6 @@ int main(int argc, char* argv[]) {
 
     active_boards = calloc(max_sessions, sizeof(board_t*));
     
-    // NOVO: Inicializar array de nomes ativos
     active_player_names = calloc(max_sessions, sizeof(char*));
     for(int i = 0; i < max_sessions; i++) {
         active_player_names[i] = calloc(1, 40);
@@ -246,7 +226,7 @@ int main(int argc, char* argv[]) {
     int reg_fd = open(register_pipe_name, O_RDWR);
     if (reg_fd == -1) return 1;
 
-    printf("Servidor (PID %d) pronto. Threads: %d\n", getpid(), max_sessions);
+    printf("Servidor (PID %d) . Max jogadores: %d\n", getpid(), max_sessions);
 
     while (1) {
         if (print_stats_request) {

@@ -30,7 +30,6 @@ static void *receiver_thread(void *arg) {
             pthread_mutex_lock(&mutex);
             stop_execution = true;
             pthread_mutex_unlock(&mutex);
-            // Espera 3 segundos para veres o resultado final
             sleep(3);
             free(b.data);
             break;
@@ -45,13 +44,12 @@ int main(int argc, char *argv[]) {
     const char *client_id = argv[1];
     const char *reg_pipe = argv[2];
     FILE *cmd_fp = (argc == 4) ? fopen(argv[3], "r") : NULL;
-    char req_p[40], not_p[40];
-    snprintf(req_p, 40, "/tmp/%s_req", client_id);
-    snprintf(not_p, 40, "/tmp/%s_not", client_id);
+    char req_p[MAX_PIPE_PATH_LENGTH], not_p[MAX_PIPE_PATH_LENGTH];
+    snprintf(req_p, MAX_PIPE_PATH_LENGTH, "/tmp/%s_req", client_id);
+    snprintf(not_p, MAX_PIPE_PATH_LENGTH, "/tmp/%s_not", client_id);
 
     if (pacman_connect(req_p, not_p, reg_pipe) != 0) return 1;
 
-    // CORREÇÃO: Inicializar o terminal ANTES de criar a thread que desenha
     terminal_init();
 
     pthread_t r_tid;
@@ -80,8 +78,8 @@ int main(int argc, char *argv[]) {
     pacman_disconnect();
     pthread_join(r_tid, NULL);
     if (cmd_fp) fclose(cmd_fp);
+    pthread_mutex_destroy(&mutex);
     
-    // Limpa o ecrã final e restaura o terminal
     terminal_cleanup();
     return 0;
 }
