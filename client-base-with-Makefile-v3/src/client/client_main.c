@@ -13,6 +13,7 @@
 bool stop_execution = false;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Thread function to receive board updates
 static void *receiver_thread(void *arg) {
     (void)arg;
     while (true) {
@@ -39,6 +40,7 @@ static void *receiver_thread(void *arg) {
     return NULL;
 }
 
+// Main function, initializes client and handles user input
 int main(int argc, char *argv[]) {
     if (argc < 3) return 1;
     const char *client_id = argv[1];

@@ -25,15 +25,15 @@ typedef struct {
     char next_command;
     pthread_mutex_t cmd_lock;
     volatile int thread_shutdown; 
-} session_context_t;
+} session_context_t; // Session context structure
 
 typedef struct {
     board_t *board;
     int ghost_index;
     volatile int *shutdown_ptr;
-} ghost_thread_arg_t;
+} ghost_thread_arg_t; // Ghost thread argument structure
 
-
+// Function to send board update to client
 void send_board_update(int fd, board_t *board, int victory, int game_over) {
     if (!board || fd < 0) return;
     
@@ -84,6 +84,7 @@ void send_board_update(int fd, board_t *board, int victory, int game_over) {
     free(packet);
 }
 
+// Thread to listen for player input commands
 void* input_listener_thread(void *arg) {
     session_context_t *ctx = (session_context_t*) arg;
     unsigned char op;
@@ -110,6 +111,7 @@ void* input_listener_thread(void *arg) {
     return NULL;
 }
 
+// Thread to control Pacman movements
 void* pacman_thread(void *arg) {
     session_context_t *ctx = (session_context_t*) arg;
     board_t *board = ctx->board;
@@ -163,6 +165,7 @@ void* pacman_thread(void *arg) {
     return (void*) retval;
 }
 
+// Thread to control Ghost movements
 void* ghost_thread(void *arg) {
     ghost_thread_arg_t *ghost_arg = (ghost_thread_arg_t*) arg;
     board_t *board = ghost_arg->board;
@@ -187,6 +190,7 @@ void* ghost_thread(void *arg) {
     return NULL;
 }
 
+// Main function to run a game session
 int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id, board_t **registry, pthread_mutex_t *registry_lock) {
     srand((unsigned int)time(NULL));
     DIR* level_dir = opendir(level_dir_path);

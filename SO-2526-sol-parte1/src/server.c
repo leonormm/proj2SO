@@ -19,7 +19,7 @@ typedef struct {
     char req_pipe[40];
     char notif_pipe[40];
     char level_dir[256];
-} session_request_t;
+} session_request_t; // Session request structure
 
 typedef struct {
     session_request_t buf[BUFF_SIZE];
@@ -28,7 +28,7 @@ typedef struct {
     sem_t *sem_full;
     sem_t *sem_empty;
     pthread_mutex_t mutex;
-} request_buffer_t;
+} request_buffer_t; // Request buffer structure
 
 request_buffer_t req_buffer;
 
@@ -36,34 +36,38 @@ typedef struct {
     int slot_id;
     int points;
     board_t *board;
-} game_entry_t;
+} game_entry_t; // Game entry for logging
 
-
+// Global variables
 board_t **active_boards;
 char **active_player_names; 
 pthread_mutex_t active_players_lock = PTHREAD_MUTEX_INITIALIZER;
 
-int max_sessions = 0;
+int max_sessions = 0; 
 pthread_mutex_t boards_lock = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t print_stats_request = 0;
 
-char sem_full_name[64];
+char sem_full_name[64]; // Semaphore names
 char sem_empty_name[64];
 
+// Function prototypes
 int run_game_session(int req_fd, int notif_fd, char* level_dir, int slot_id, board_t **registry, pthread_mutex_t *registry_lock);
 
+// Signal handler
 void handle_signal(int sig) {
     if (sig == SIGUSR1) {
         print_stats_request = 1;
     }
 }
 
+// Comparison function for sorting scores
 int compare_scores(const void *a, const void *b) {
     game_entry_t *entryA = (game_entry_t *)a;
     game_entry_t *entryB = (game_entry_t *)b;
     return entryB->points - entryA->points;
 }
 
+// Logging function
 void log_active_games() {
     FILE *f = fopen("server_log.txt", "w");
     if (!f) return;
@@ -109,6 +113,7 @@ void log_active_games() {
     fclose(f);
 }
 
+// Worker thread function
 void* worker_thread(void* arg) {
     int slot_id = *(int*)arg;
     free(arg);
@@ -173,6 +178,7 @@ void* worker_thread(void* arg) {
     return NULL;
 }
 
+// Main function
 int main(int argc, char* argv[]) {
     if (argc != 4) {
         fprintf(stderr, "Uso: %s <levels_dir> <max_games> <register_pipe>\n", argv[0]);

@@ -15,6 +15,7 @@ int notif_fd = -1;
 char my_req_pipe[40];
 char my_notif_pipe[40];
 
+// Auxiliary function to read exact number of bytes
 int read_exact(int fd, void *buf, size_t count) {
     size_t total_read = 0;
     while (total_read < count) {
@@ -25,6 +26,7 @@ int read_exact(int fd, void *buf, size_t count) {
     return 1;
 }
 
+// Connect to the Pacman server
 int pacman_connect(const char *req_pipe, const char *notif_pipe, const char *server_pipe) {
     strncpy(my_req_pipe, req_pipe, 40);
     strncpy(my_notif_pipe, notif_pipe, 40);
@@ -57,6 +59,7 @@ int pacman_connect(const char *req_pipe, const char *notif_pipe, const char *ser
     return 0;
 }
 
+// Disconnect from the Pacman server
 int pacman_disconnect() {
     if (req_fd != -1) {
         unsigned char op = OP_CODE_DISCONNECT;
@@ -69,11 +72,13 @@ int pacman_disconnect() {
     return 0;
 }
 
+// Send a play command to the server
 void pacman_play(char command) {
     unsigned char buf[2] = {OP_CODE_PLAY, (unsigned char)command};
     write(req_fd, buf, 2);
 }
 
+// Receive a board update from the server
 Board receive_board_update() {
     Board b = {0};
     unsigned char header[25];
