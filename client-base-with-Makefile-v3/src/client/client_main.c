@@ -50,6 +50,8 @@ int main(int argc, char *argv[]) {
     snprintf(req_p, MAX_PIPE_PATH_LENGTH, "/tmp/%s_req", client_id);
     snprintf(not_p, MAX_PIPE_PATH_LENGTH, "/tmp/%s_not", client_id);
 
+    open_debug_file("client_debug.log");
+
     if (pacman_connect(req_p, not_p, reg_pipe) != 0) return 1;
 
     terminal_init();
@@ -83,5 +85,7 @@ int main(int argc, char *argv[]) {
     pthread_mutex_destroy(&mutex);
     
     terminal_cleanup();
+
+    close_debug_file();
     return 0;
 }

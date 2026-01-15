@@ -196,6 +196,8 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
     DIR* level_dir = opendir(level_dir_path);
     if (!level_dir) return -1;
     
+    open_debug_file("debug.log");
+
     session_context_t ctx = {
         .req_fd = req_fd, 
         .notif_fd = notif_fd, 
@@ -275,5 +277,7 @@ int run_game_session(int req_fd, int notif_fd, char* level_dir_path, int slot_id
     
     pthread_mutex_destroy(&ctx.cmd_lock);
     closedir(level_dir);
+
+    close_debug_file();
     return 0;
 }
